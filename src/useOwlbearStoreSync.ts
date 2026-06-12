@@ -44,6 +44,14 @@ export function useOwlbearStoreSync() {
     }
   }, [sceneReady, setFogFilled]);
 
+  const setGridDpi = useOwlbearStore((state) => state.setGridDpi);
+  useEffect(() => {
+    if (sceneReady) {
+      OBR.scene.grid.getDpi().then(setGridDpi);
+      return OBR.scene.grid.onChange((grid) => setGridDpi(grid.dpi));
+    }
+  }, [sceneReady, setGridDpi]);
+
   const setRole = useOwlbearStore((state) => state.setRole);
   const setSelection = useOwlbearStore((state) => state.setSelection);
   useEffect(() => {

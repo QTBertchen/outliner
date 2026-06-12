@@ -82,6 +82,7 @@ export function Items({ search }: { search: string }) {
   const role = useOwlbearStore((state) => state.role);
   const selection = useOwlbearStore((state) => state.selection);
   const fogFilled = useOwlbearStore((state) => state.fogFilled);
+  const gridDpi = useOwlbearStore((state) => state.gridDpi);
 
   const searching = Boolean(search);
 
@@ -98,13 +99,13 @@ export function Items({ search }: { search: string }) {
       return hidden;
     }
     for (const item of items) {
-      if (item.layer !== "FOG" && isCoveredByFog(item, fogPath)) {
+      if (item.layer !== "FOG" && isCoveredByFog(item, fogPath, gridDpi)) {
         hidden.add(item.id);
       }
     }
     fogPath.delete();
     return hidden;
-  }, [items, fogFilled, role]);
+  }, [items, fogFilled, role, gridDpi]);
 
   const fuse = useMemo(() => {
     if (!searching) {

@@ -1,4 +1,4 @@
-import { Item, isCurve, isPath, isShape } from "@owlbear-rodeo/sdk";
+import { Item, isCurve, isImage, isPath, isShape } from "@owlbear-rodeo/sdk";
 import { curve } from "./icons/items/CurveIcon";
 import { getPathKit } from "./pathkit";
 
@@ -62,18 +62,32 @@ export function buildFogPath(
   }
 }
 
-/** Is the item's position covered by the given fog path */
+/**
+ * Is the item fully covered by the given fog path.
+ * Items that are even partially out of the fog count as not covered.
+ */
 export function isCoveredByFog(
   item: Item,
-  fogPath: PathKit.SkPath | undefined
+  fogPath: PathKit.SkPath | undefined,
+  sceneDpi: number
 ): boolean {
   if (!fogPath) {
     return false;
   }
   try {
-    // PathKit has no point-in-path query so intersect the fog
-    // with a tiny probe square around the item's position instead
     const pk = getPathKit();
+
+    const area = itemAreaToPath(pk, item, sceneDpi);
+    if (area) {
+      // Covered when nothing of the item's area is left outside the fog
+      area.transform(getTransformMatrix(item));
+      area.op(fogPath, pk.PathOp.DIFFERENCE);
+      const covered = area.toCmds().length === 0;
+      area.delete();
+      return covered;
+    }
+
+    // No known extents: probe the item's position with a tiny square
     const probe = pk.NewPath();
     probe.rect(item.position.x - 0.5, item.position.y - 0.5, 1, 1);
     probe.op(fogPath, pk.PathOp.INTERSECT);
@@ -84,6 +98,27 @@ export function isCoveredByFog(
     console.error("Failed to test fog coverage", error);
     return false;
   }
+}
+
+/** The local-space area of an item, or undefined when its extents are unknown */
+function itemAreaToPath(
+  pk: PathKit.PathKitApi,
+  item: Item,
+  sceneDpi: number
+): PathKit.SkPath | undefined {
+  if (isImage(item)) {
+    // Images are sized in image pixels mapped onto the scene grid
+    const factor = sceneDpi / item.grid.dpi;
+    const path = pk.NewPath();
+    path.rect(
+      -item.grid.offset.x * factor,
+      -item.grid.offset.y * factor,
+      item.image.width * factor,
+      item.image.height * factor
+    );
+    return path;
+  }
+  return fogItemToPath(pk, item);
 }
 
 /** Convert a fog item's geometry to a local-space path */
