@@ -11,8 +11,10 @@ interface OwlbearState {
   permissions: Permission[];
   fogFilled: boolean;
   gridDpi: number;
+  actionOpen: boolean;
 
   setSceneReady: (ready: boolean) => void;
+  setActionOpen: (actionOpen: boolean) => void;
   setItems: (items: Item[]) => void;
   setGroups: (groups: Group[]) => void;
   setFogFilled: (fogFilled: boolean) => void;
@@ -31,8 +33,10 @@ export const useOwlbearStore = create<OwlbearState>()((set) => ({
   permissions: [],
   fogFilled: false,
   gridDpi: 150,
+  actionOpen: false,
 
   setSceneReady: (sceneReady) => set((state) => ({ ...state, sceneReady })),
+  setActionOpen: (actionOpen) => set((state) => ({ ...state, actionOpen })),
   setItems: (items) => set((state) => ({ ...state, items })),
   setGroups: (groups) => set((state) => ({ ...state, groups })),
   setFogFilled: (fogFilled) => set((state) => ({ ...state, fogFilled })),
