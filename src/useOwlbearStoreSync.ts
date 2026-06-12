@@ -1,6 +1,7 @@
 import OBR, { Player } from "@owlbear-rodeo/sdk";
 import { useOwlbearStore } from "./useOwlbearStore";
 import { useEffect } from "react";
+import { getGroups } from "./groups";
 
 // Sync OBR with the apps Zustand store
 export function useOwlbearStoreSync() {
@@ -20,6 +21,18 @@ export function useOwlbearStoreSync() {
       setItems([]);
     }
   }, [sceneReady]);
+
+  const setGroups = useOwlbearStore((state) => state.setGroups);
+  useEffect(() => {
+    if (sceneReady) {
+      OBR.scene.getMetadata().then((metadata) => setGroups(getGroups(metadata)));
+      return OBR.scene.onMetadataChange((metadata) =>
+        setGroups(getGroups(metadata))
+      );
+    } else {
+      setGroups([]);
+    }
+  }, [sceneReady, setGroups]);
 
   const setRole = useOwlbearStore((state) => state.setRole);
   const setSelection = useOwlbearStore((state) => state.setSelection);

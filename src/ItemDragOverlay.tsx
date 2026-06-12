@@ -2,6 +2,7 @@ import { useOwlbearStore } from "./useOwlbearStore";
 import { createPortal } from "react-dom";
 import { DragOverlay, UniqueIdentifier } from "@dnd-kit/core";
 import { ItemListItem } from "./ItemListItem";
+import { GroupListItem } from "./GroupListItem";
 import Badge from "@mui/material/Badge";
 import { memo } from "react";
 
@@ -11,10 +12,31 @@ export const ItemDragOverlay = memo(function ({
   dragId: UniqueIdentifier | null;
 }) {
   const items = useOwlbearStore((state) => state.items);
+  const groups = useOwlbearStore((state) => state.groups);
   const selection = useOwlbearStore((state) => state.selection);
 
   function renderDragOverlays() {
-    if (!dragId || !selection || typeof dragId !== "string") {
+    if (!dragId || typeof dragId !== "string") {
+      return null;
+    }
+
+    const group = groups.find((group) => group.id === dragId);
+    if (group) {
+      return (
+        <div
+          style={{
+            zIndex: 10000,
+            position: "absolute",
+          }}
+        >
+          <DragOverlay dropAnimation={null}>
+            <GroupListItem group={group} rows={[]} dragging />
+          </DragOverlay>
+        </div>
+      );
+    }
+
+    if (!selection) {
       return null;
     }
     const itemIds = items.map((item) => item.id);

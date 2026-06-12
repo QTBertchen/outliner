@@ -5,12 +5,18 @@ import Box from "@mui/material/Box";
 export function SortableItem({
   itemId,
   children,
+  disableDrag,
 }: {
   itemId: string;
   children?: React.ReactNode;
+  disableDrag?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging, isOver } = useSortable(
-    { id: itemId }
+    {
+      id: itemId,
+      // Keep the row as a drop target but prevent it from being dragged
+      disabled: { draggable: disableDrag ?? false, droppable: false },
+    }
   );
 
   return (

@@ -19,7 +19,18 @@ import Fuse from "fuse.js";
 import { useMemo, useState } from "react";
 import { ItemDragOverlay } from "./ItemDragOverlay";
 import { ItemList } from "./ItemList";
-import { isTextable, lerp, toPlainText } from "./helpers";
+import {
+  GROUP_MEMBER_METADATA_KEY,
+  Group,
+  Row,
+  distributeZIndexes,
+  getItemGroupId,
+  getRowId,
+  getRowZIndex,
+  isSelfOrDescendantGroup,
+  updateGroups,
+} from "./groups";
+import { isTextable, toPlainText } from "./helpers";
 import { useOwlbearStore } from "./useOwlbearStore";
 
 const VALID_LAYERS = new Set<Item["layer"]>([
@@ -35,8 +46,37 @@ const VALID_LAYERS = new Set<Item["layer"]>([
   "MAP",
 ]);
 
+const ALL_LAYERS: Item["layer"][] = [
+  "POPOVER",
+  "POINTER",
+  "GRID",
+  "CONTROL",
+  "FOG",
+  "RULER",
+  "TEXT",
+  "NOTE",
+  "ATTACHMENT",
+  "CHARACTER",
+  "PROP",
+  "DRAWING",
+  "MOUNT",
+  "MAP",
+];
+
+/** The insertion position resolved from a drop */
+interface Slot {
+  layer: Item["layer"];
+  /** Target group to insert into or `null` for the layer root */
+  parentId: string | null;
+  /** zIndex of the row above the slot, if any */
+  upper?: number;
+  /** zIndex of the row below the slot, if any */
+  lower?: number;
+}
+
 export function Items({ search }: { search: string }) {
   const items = useOwlbearStore((state) => state.items);
+  const groups = useOwlbearStore((state) => state.groups);
   const role = useOwlbearStore((state) => state.role);
   const selection = useOwlbearStore((state) => state.selection);
 
@@ -93,8 +133,25 @@ export function Items({ search }: { search: string }) {
     return items;
   }, [items, fuse, search]);
 
-  const [shownItemsByLayer, shownIds] = useMemo(() => {
-    const layers: Record<Item["layer"], Item[]> = {
+  const {
+    rowsByLayer,
+    flatIdsByLayer,
+    rowById,
+    parentByRowId,
+    layerByRowId,
+    sortableIds,
+    shownItemIds,
+  } = useMemo(() => {
+    const groupById = new Map(groups.map((group) => [group.id, group]));
+
+    // Groups are hidden while searching so results show as a flat list
+    const useGroups = !searching;
+
+    const isValidLayer = (layer: Item["layer"]) =>
+      VALID_LAYERS.has(layer) || (layer === "FOG" && role === "GM");
+
+    // Sort items and split them into their group (or the root of their layer)
+    const rootItems: Record<Item["layer"], Item[]> = {
       POPOVER: [],
       POINTER: [],
       GRID: [],
@@ -110,25 +167,125 @@ export function Items({ search }: { search: string }) {
       MOUNT: [],
       MAP: [],
     };
-
-    const sortedItems = filteredItems.sort((a, b) => b.zIndex - a.zIndex);
-
+    const itemsByGroup = new Map<string, Item[]>();
+    const sortedItems = [...filteredItems].sort((a, b) => b.zIndex - a.zIndex);
     for (const item of sortedItems) {
       const hidden = !item.visible && role === "PLAYER";
-      const valid =
-        VALID_LAYERS.has(item.layer) || (item.layer === "FOG" && role === "GM");
-      if (!hidden && valid) {
-        layers[item.layer].push(item);
+      if (hidden || !isValidLayer(item.layer)) {
+        continue;
+      }
+      const groupId = useGroups ? getItemGroupId(item) : undefined;
+      const group = groupId ? groupById.get(groupId) : undefined;
+      if (group && group.layer === item.layer) {
+        const members = itemsByGroup.get(group.id);
+        if (members) {
+          members.push(item);
+        } else {
+          itemsByGroup.set(group.id, [item]);
+        }
+      } else {
+        rootItems[item.layer].push(item);
       }
     }
 
-    const allIds: string[] = [];
-    for (const layer of Object.keys(layers)) {
-      allIds.push(...layers[layer as Item["layer"]].map((item) => item.id));
+    // Split groups into the root of their layer or their parent group
+    const rootGroupsByLayer = new Map<Item["layer"], Group[]>();
+    const groupsByParent = new Map<string, Group[]>();
+    if (useGroups) {
+      for (const group of groups) {
+        if (group.parentId && groupById.has(group.parentId)) {
+          const children = groupsByParent.get(group.parentId);
+          if (children) {
+            children.push(group);
+          } else {
+            groupsByParent.set(group.parentId, [group]);
+          }
+        } else if (isValidLayer(group.layer)) {
+          const roots = rootGroupsByLayer.get(group.layer);
+          if (roots) {
+            roots.push(group);
+          } else {
+            rootGroupsByLayer.set(group.layer, [group]);
+          }
+        }
+      }
     }
 
-    return [layers, allIds];
-  }, [filteredItems, role]);
+    // Build the row tree for each layer, sorted by descending zIndex
+    const buildRows = (
+      layer: Item["layer"],
+      parentId: string | null,
+      visited: Set<string>
+    ): Row[] => {
+      const childGroups =
+        (parentId === null
+          ? rootGroupsByLayer.get(layer)
+          : groupsByParent.get(parentId)) ?? [];
+      const childItems =
+        parentId === null
+          ? rootItems[layer]
+          : itemsByGroup.get(parentId) ?? [];
+      const rows: Row[] = [];
+      for (const group of childGroups) {
+        // Guard against cycles in corrupted metadata
+        if (visited.has(group.id)) {
+          continue;
+        }
+        visited.add(group.id);
+        rows.push({
+          type: "group",
+          group,
+          children: buildRows(layer, group.id, visited),
+        });
+      }
+      for (const item of childItems) {
+        rows.push({ type: "item", item });
+      }
+      return rows.sort((a, b) => getRowZIndex(b) - getRowZIndex(a));
+    };
+
+    const rowsByLayer = {} as Record<Item["layer"], Row[]>;
+    const flatIdsByLayer = {} as Record<Item["layer"], string[]>;
+    const rowById = new Map<string, Row>();
+    const parentByRowId = new Map<string, string | null>();
+    const layerByRowId = new Map<string, Item["layer"]>();
+    const sortableIds: string[] = [];
+    const shownItemIds: string[] = [];
+
+    const visited = new Set<string>();
+    for (const layer of ALL_LAYERS) {
+      const rows = buildRows(layer, null, visited);
+      rowsByLayer[layer] = rows;
+      const flatIds: string[] = [];
+      const walk = (rows: Row[], parentId: string | null) => {
+        for (const row of rows) {
+          const id = getRowId(row);
+          flatIds.push(id);
+          rowById.set(id, row);
+          parentByRowId.set(id, parentId);
+          layerByRowId.set(id, layer);
+          if (row.type === "item") {
+            shownItemIds.push(id);
+          } else {
+            walk(row.children, row.group.id);
+          }
+        }
+      };
+      walk(rows, null);
+      flatIdsByLayer[layer] = flatIds;
+      sortableIds.push(...flatIds);
+    }
+
+    return {
+      rowsByLayer,
+      flatIdsByLayer,
+      rowById,
+      parentByRowId,
+      layerByRowId,
+      sortableIds,
+      shownItemIds,
+    };
+  }, [filteredItems, groups, role, searching]);
 
   async function handleItemSelect(
     item: Item,
@@ -147,8 +304,8 @@ export function Items({ search }: { search: string }) {
     } else if (event.shiftKey) {
       // Make a range selection
       if (currentSelection.length > 0) {
-        const currentIndex = shownIds.indexOf(id);
-        const lastIndex = shownIds.indexOf(
+        const currentIndex = shownItemIds.indexOf(id);
+        const lastIndex = shownItemIds.indexOf(
           currentSelection[currentSelection.length - 1]
         );
         const idsToAdd: string[] = [];
@@ -159,7 +316,7 @@ export function Items({ search }: { search: string }) {
           direction < 0 ? i >= currentIndex : i <= currentIndex;
           i += direction
         ) {
-          const localId = shownIds[i];
+          const localId = shownItemIds[i];
           if (currentSelection.includes(localId)) {
             idsToRemove.push(localId);
           } else {
@@ -238,45 +395,73 @@ export function Items({ search }: { search: string }) {
       return;
     }
 
-    if (!selection || !selection.includes(active.id)) {
+    if (rowById.get(active.id)?.type === "group") {
+      // Groups are not OBR items so they don't affect the selection
+      if (role !== "GM") {
+        return;
+      }
+    } else if (!selection || !selection.includes(active.id)) {
       OBR.player.select([active.id]);
     }
 
     setDragId(active.id);
   }
 
-  function handleDragEnd(event: DragEndEvent) {
-    if (typeof event.over?.id === "string") {
-      // If we're over the START pseudo element move to the top of the layer
-      if (event.over && event.over.id.startsWith("START_")) {
-        const layer = event.over.id.slice(6) as Item["layer"];
-        // Move selection descending from the first zIndex of this layer
-        const firstItem = shownItemsByLayer[layer][0];
-        if (firstItem) {
-          moveSelectionAfter(firstItem.zIndex, firstItem.layer);
-        } else {
-          moveSelectionLayer(layer);
-        }
-      } else {
-        const overIndex = shownIds.indexOf(event.over.id);
-        const overItem = items.find((item) => item.id === event.over?.id);
-        const draggingItem = items.find((item) => item.id === dragId);
-        // If we're over another item
-        if (draggingItem && overItem && draggingItem !== overItem) {
-          const nextIndex = overIndex + 1;
-          const nextId = shownIds[nextIndex];
-          const nextItem = items.find((item) => item.id === nextId);
+  /**
+   * Resolve the insertion position for a drop using insert-after-row
+   * semantics: dropping over a group header inserts at the top of that
+   * group, dropping over an item inserts after it within its group.
+   */
+  function getSlot(overId: string): Slot | undefined {
+    if (overId.startsWith("START_")) {
+      const layer = overId.slice(6) as Item["layer"];
+      const first = rowsByLayer[layer][0];
+      return {
+        layer,
+        parentId: null,
+        lower: first ? getRowZIndex(first) : undefined,
+      };
+    }
 
-          // If we're between two items on the same layer
-          if (nextItem && nextItem.layer === overItem.layer) {
-            // Insert selection between items on the same layer
-            const minZIndex = overItem.zIndex;
-            const maxZIndex = nextItem.zIndex;
-            moveSelectionBetween(minZIndex, maxZIndex, overItem.layer);
-          } else {
-            // If we're at the end of the list
-            moveSelectionBefore(overItem.zIndex, overItem.layer);
+    const overRow = rowById.get(overId);
+    const layer = layerByRowId.get(overId);
+    if (!overRow || !layer) {
+      return undefined;
+    }
+
+    const parentId =
+      overRow.type === "group"
+        ? overRow.group.id
+        : parentByRowId.get(overId) ?? null;
+
+    const flatIds = flatIdsByLayer[layer];
+    const nextId = flatIds[flatIds.indexOf(overId) + 1];
+    const nextRow = nextId ? rowById.get(nextId) : undefined;
+
+    return {
+      layer,
+      parentId,
+      upper: getRowZIndex(overRow),
+      lower: nextRow ? getRowZIndex(nextRow) : undefined,
+    };
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const overId = event.over?.id;
+    if (typeof overId === "string" && typeof dragId === "string") {
+      const slot = getSlot(overId);
+      const dragRow = rowById.get(dragId);
+      if (slot) {
+        if (dragRow?.type === "group") {
+          // Prevent dropping a group into itself or its descendants
+          const cycle =
+            slot.parentId !== null &&
+            isSelfOrDescendantGroup(groups, dragRow.group.id, slot.parentId);
+          if (role === "GM" && !cycle) {
+            moveGroupTo(dragRow, slot);
           }
+        } else {
+          moveSelectionTo(slot);
         }
       }
     }
@@ -284,91 +469,74 @@ export function Items({ search }: { search: string }) {
     setDragId(null);
   }
 
-  // Move the current selection to a new layer
-  async function moveSelectionLayer(layer: Item["layer"]) {
+  // Move the current selection into the slot, updating zIndex,
+  // layer and group membership together
+  async function moveSelectionTo(slot: Slot) {
     if (!selection) {
       return;
     }
 
-    await OBR.scene.items.updateItems(selection, (items) => {
-      for (const item of items) {
-        item.layer = layer;
-      }
+    const sorted = [...selection].sort(
+      (a, b) => sortableIds.indexOf(a) - sortableIds.indexOf(b)
+    );
+    const zIndexes = distributeZIndexes(slot.upper, slot.lower, sorted.length);
+    await OBR.scene.items.updateItems(sorted, (items: Item[]) => {
+      items.forEach((item, index) => {
+        item.zIndex = zIndexes[index];
+        item.layer = slot.layer;
+        if (slot.parentId) {
+          item.metadata[GROUP_MEMBER_METADATA_KEY] = slot.parentId;
+        } else {
+          delete item.metadata[GROUP_MEMBER_METADATA_KEY];
+        }
+      });
     });
   }
 
-  // Move the current selection between the input zIndex's
-  async function moveSelectionBetween(
-    minZIndex: number,
-    maxZIndex: number,
-    layer?: Item["layer"]
-  ) {
-    if (!selection) {
-      return;
-    }
-
-    // Evenly distribute the items between the min and max by
-    // lerping between them with an alpha determined by the
-    // selection length
-    const lerpAlpha = 1 / (selection.length + 1);
-    await OBR.scene.items.updateItems(
-      selection.sort((a, b) => shownIds.indexOf(a) - shownIds.indexOf(b)),
-      (items) => {
-        let i = 1;
-        for (const item of items) {
-          item.zIndex = lerp(minZIndex, maxZIndex, lerpAlpha * i);
-          i++;
-          if (layer) {
-            item.layer = layer;
-          }
-        }
+  // Move a group and its entire subtree into the slot, rewriting the
+  // zIndexes of all contained rows so canvas order matches the outline
+  async function moveGroupTo(row: Row & { type: "group" }, slot: Slot) {
+    const subtree: Row[] = [];
+    const collect = (current: Row) => {
+      subtree.push(current);
+      if (current.type === "group") {
+        current.children.forEach(collect);
       }
-    );
-  }
+    };
+    collect(row);
 
-  // Move the current selection to before the input zIndex
-  async function moveSelectionBefore(
-    startZIndex: number,
-    layer?: Item["layer"]
-  ) {
-    if (!selection) {
-      return;
-    }
-
-    await OBR.scene.items.updateItems(
-      selection.sort((a, b) => shownIds.indexOf(a) - shownIds.indexOf(b)),
-      (items) => {
-        let i = 1;
-        for (const item of items) {
-          item.zIndex = startZIndex - i;
-          i++;
-          if (layer) {
-            item.layer = layer;
-          }
-        }
+    const zIndexes = distributeZIndexes(slot.upper, slot.lower, subtree.length);
+    const groupZIndexes = new Map<string, number>();
+    const itemZIndexes = new Map<string, number>();
+    subtree.forEach((current, index) => {
+      if (current.type === "group") {
+        groupZIndexes.set(current.group.id, zIndexes[index]);
+      } else {
+        itemZIndexes.set(current.item.id, zIndexes[index]);
       }
-    );
-  }
+    });
 
-  // Move the current selection to after the input zIndex
-  async function moveSelectionAfter(endZIndex: number, layer?: Item["layer"]) {
-    if (!selection) {
-      return;
-    }
-
-    await OBR.scene.items.updateItems(
-      selection.sort((a, b) => shownIds.indexOf(b) - shownIds.indexOf(a)),
-      (items) => {
-        let i = 1;
-        for (const item of items) {
-          item.zIndex = endZIndex + i;
-          i++;
-          if (layer) {
-            item.layer = layer;
-          }
+    await updateGroups((groups) =>
+      groups.map((group) => {
+        const zIndex = groupZIndexes.get(group.id);
+        if (zIndex === undefined) {
+          return group;
         }
-      }
+        if (group.id === row.group.id) {
+          return { ...group, zIndex, layer: slot.layer, parentId: slot.parentId };
+        }
+        return { ...group, zIndex, layer: slot.layer };
+      })
     );
+
+    if (itemZIndexes.size > 0) {
+      await OBR.scene.items.updateItems([...itemZIndexes.keys()], (items) => {
+        for (const item of items) {
+          item.zIndex = itemZIndexes.get(item.id) ?? item.zIndex;
+          item.layer = slot.layer;
+        }
+      });
+    }
   }
 
   function handleDragCancel() {
@@ -385,11 +553,9 @@ export function Items({ search }: { search: string }) {
       }
     } else {
       // When searching only show layers with results
-      return Object.entries(shownItemsByLayer)
-        .filter(([_, items]) => items.length > 0)
-        .map(([layer]) => layer) as Item["layer"][];
+      return ALL_LAYERS.filter((layer) => rowsByLayer[layer].length > 0);
     }
-  }, [searching, shownItemsByLayer, role]);
+  }, [searching, rowsByLayer, role]);
 
   return (
     <DndContext
@@ -399,11 +565,14 @@ export function Items({ search }: { search: string }) {
       collisionDetection={closestCenter}
       sensors={sensors}
     >
-      <SortableContext items={shownIds} strategy={verticalListSortingStrategy}>
+      <SortableContext
+        items={sortableIds}
+        strategy={verticalListSortingStrategy}
+      >
         {shownLayers.map((layer) => (
           <ItemList
             key={layer}
-            items={shownItemsByLayer[layer]}
+            rows={rowsByLayer[layer]}
             layer={layer as Item["layer"]}
             onItemSelect={handleItemSelect}
             onItemFocus={handleItemFocus}

@@ -1,25 +1,30 @@
+import CreateNewFolderIcon from "@mui/icons-material/CreateNewFolderRounded";
 import ExpandLess from "@mui/icons-material/ExpandLessRounded";
 import ExpandMore from "@mui/icons-material/ExpandMoreRounded";
 import Collapse from "@mui/material/Collapse";
+import IconButton from "@mui/material/IconButton";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import Tooltip from "@mui/material/Tooltip";
 import { Item } from "@owlbear-rodeo/sdk";
 import { useState } from "react";
-import { ItemListItem } from "./ItemListItem";
+import { RowList } from "./GroupListItem";
 import { LayerIcon } from "./LayerIcon";
 import { SortableItem } from "./SortableItem";
+import { Row, createGroup, getRowZIndex } from "./groups";
 import { capitalize } from "./helpers";
+import { useOwlbearStore } from "./useOwlbearStore";
 
 export function ItemList({
   layer,
-  items,
+  rows,
   onItemSelect,
   onItemFocus,
 }: {
   layer: Item["layer"];
-  items: Item[];
+  rows: Row[];
   onItemSelect: (
     item: Item,
     event: React.MouseEvent<HTMLDivElement, MouseEvent>
@@ -29,10 +34,19 @@ export function ItemList({
     event: React.MouseEvent<HTMLDivElement, MouseEvent>
   ) => void;
 }) {
+  const role = useOwlbearStore((state) => state.role);
   const [open, setOpen] = useState(false);
 
   function handleLayerToggle() {
     setOpen(!open);
+  }
+
+  function handleAddGroup(event: React.MouseEvent) {
+    event.stopPropagation();
+    // Place the new group at the top of the layer
+    const topZIndex = rows.length > 0 ? getRowZIndex(rows[0]) + 1 : 1;
+    createGroup(layer, topZIndex);
+    setOpen(true);
   }
 
   const layerName = `${capitalize(layer)}${
@@ -52,21 +66,28 @@ export function ItemList({
           <LayerIcon layer={layer} />
         </ListItemIcon>
         <ListItemText primary={layerName} />
+        {role === "GM" && (
+          <Tooltip title="Add group" disableInteractive>
+            <IconButton
+              size="small"
+              sx={{ color: "text.secondary", mr: 0.5 }}
+              onClick={handleAddGroup}
+            >
+              <CreateNewFolderIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         {open ? <ExpandLess /> : <ExpandMore />}
       </ListItemButton>
       <Collapse in={open} unmountOnExit>
         <List component="div" dense>
           {/* A pseudo element that shows a sort indicator for the start of the list */}
           <SortableItem itemId={`START_${layer}`} />
-          {items.map((item) => (
-            <SortableItem key={item.id} itemId={item.id}>
-              <ItemListItem
-                item={item}
-                onClick={(e) => onItemSelect(item, e)}
-                onDoubleClick={(e) => onItemFocus(item, e)}
-              />
-            </SortableItem>
-          ))}
+          <RowList
+            rows={rows}
+            onItemSelect={onItemSelect}
+            onItemFocus={onItemFocus}
+          />
         </List>
       </Collapse>
     </>
