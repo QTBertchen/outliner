@@ -19,6 +19,7 @@ import Fuse from "fuse.js";
 import { useMemo, useState } from "react";
 import { ItemDragOverlay } from "./ItemDragOverlay";
 import { ItemList } from "./ItemList";
+import { buildFogPath, isCoveredByFog } from "./fog";
 import {
   GROUP_MEMBER_METADATA_KEY,
   Group,
@@ -79,8 +80,30 @@ export function Items({ search }: { search: string }) {
   const groups = useOwlbearStore((state) => state.groups);
   const role = useOwlbearStore((state) => state.role);
   const selection = useOwlbearStore((state) => state.selection);
+  const fogFilled = useOwlbearStore((state) => state.fogFilled);
 
   const searching = Boolean(search);
+
+  // Ids of items covered by fog, hidden from players.
+  // The WASM fog path only lives within this computation so its
+  // lifetime never spans renders.
+  const fogHiddenIds = useMemo(() => {
+    const hidden = new Set<string>();
+    if (role !== "PLAYER") {
+      return hidden;
+    }
+    const fogPath = buildFogPath(items, fogFilled);
+    if (!fogPath) {
+      return hidden;
+    }
+    for (const item of items) {
+      if (item.layer !== "FOG" && isCoveredByFog(item, fogPath)) {
+        hidden.add(item.id);
+      }
+    }
+    fogPath.delete();
+    return hidden;
+  }, [items, fogFilled, role]);
 
   const fuse = useMemo(() => {
     if (!searching) {
@@ -170,7 +193,8 @@ export function Items({ search }: { search: string }) {
     const itemsByGroup = new Map<string, Item[]>();
     const sortedItems = [...filteredItems].sort((a, b) => b.zIndex - a.zIndex);
     for (const item of sortedItems) {
-      const hidden = !item.visible && role === "PLAYER";
+      const hidden =
+        role === "PLAYER" && (!item.visible || fogHiddenIds.has(item.id));
       if (hidden || !isValidLayer(item.layer)) {
         continue;
       }
@@ -285,7 +309,7 @@ export function Items({ search }: { search: string }) {
       sortableIds,
       shownItemIds,
     };
-  }, [filteredItems, groups, role, searching]);
+  }, [filteredItems, groups, role, searching, fogHiddenIds]);
 
   async function handleItemSelect(
     item: Item,

@@ -34,6 +34,16 @@ export function useOwlbearStoreSync() {
     }
   }, [sceneReady, setGroups]);
 
+  const setFogFilled = useOwlbearStore((state) => state.setFogFilled);
+  useEffect(() => {
+    if (sceneReady) {
+      OBR.scene.fog.getFilled().then(setFogFilled);
+      return OBR.scene.fog.onChange((fog) => setFogFilled(fog.filled));
+    } else {
+      setFogFilled(false);
+    }
+  }, [sceneReady, setFogFilled]);
+
   const setRole = useOwlbearStore((state) => state.setRole);
   const setSelection = useOwlbearStore((state) => state.setSelection);
   useEffect(() => {
