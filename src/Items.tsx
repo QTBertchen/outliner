@@ -27,6 +27,7 @@ import {
   distributeZIndexes,
   getItemGroupId,
   getRowId,
+  getRowItems,
   getRowZIndex,
   isSelfOrDescendantGroup,
   updateGroups,
@@ -256,11 +257,13 @@ export function Items({ search }: { search: string }) {
           continue;
         }
         visited.add(group.id);
-        rows.push({
-          type: "group",
-          group,
-          children: buildRows(layer, group.id, visited),
-        });
+        const children = buildRows(layer, group.id, visited);
+        // Hide groups with no visible items (empty or all items
+        // hidden/fogged) from players
+        if (role === "PLAYER" && getRowItems(children).length === 0) {
+          continue;
+        }
+        rows.push({ type: "group", group, children });
       }
       for (const item of childItems) {
         rows.push({ type: "item", item });
