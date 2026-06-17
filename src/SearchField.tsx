@@ -1,4 +1,4 @@
-import Search from "@mui/icons-material/SearchRounded";
+import Search from "@mui/icons-material/esm/SearchRounded";
 import Collapse from "@mui/material/Collapse";
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
