@@ -2,10 +2,10 @@
   "name": "Outliner",
   "version": "1.2.0",
   "manifest_version": 1,
-  "author": "Owlbear Rodeo",
-  "homepage_url": "https://extensions.owlbear.rodeo/outliner",
+  "author": "Owlbear Rodeo, QTBertchen",
+  "homepage_url": "https://github.com/QTBertchen/outliner",
   "icon": "/logo.png",
-  "description": "Manage layers, search for items and view an outline of your scenes",
+  "description": "Manage layers, search for items and view an outline of your scenes with groups. Players only see what they can see.",
   "action": {
     "title": "Outliner",
     "icon": "/icon.svg",
